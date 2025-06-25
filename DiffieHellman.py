@@ -1,0 +1,2 @@
+class DiffieHelman:
+    print("Bruh")
