@@ -1,5 +1,5 @@
 import random
-class DiffieHelman:
+class DiffieHellman:
     def __init__(self, prime, modulus):
         self.prime = prime #large prime number
         self.modulus = modulus #root modulo prime
