@@ -2,9 +2,19 @@ import socket, threading
 from DiffieHellman import DiffieHellman, key_to_string
 from vigenere import Vigenere
 
-clients = {}
+clients = {}  # conn: {"key": shared_key, "name": username}
 PRIME = 23
 BASE = 5
+
+def broadcast_user_list():
+    user_list = [info["name"] for info in clients.values()]
+    msg = "SYSTEM:USERLIST:" + ",".join(user_list)
+    for client, info in clients.items():
+        encrypted = Vigenere.vigenere_encrypt(msg, info["key"])
+        try:
+            client.send(encrypted.encode())
+        except:
+            continue
 
 def handle_client(conn, addr):
     print(f"[+] Connected by {addr}")
@@ -16,10 +26,16 @@ def handle_client(conn, addr):
 
     shared_secret = dh.calcSharedSecret(client_pubkey)
     key = key_to_string(shared_secret)
-    clients[conn] = key
 
-    print(f"[DH] Shared secret with {addr}: {shared_secret}")
-    print(f"[DH] Vigenere key for {addr}: {key}\n")
+    # Step 2: Receive client name
+    encrypted_name = conn.recv(1024).decode()
+    name = Vigenere.vigenere_decrypt(encrypted_name, key)
+
+    clients[conn] = {"key": key, "name": name}
+    print(f"[DH] Shared secret with {addr} ({name}): {shared_secret}")
+    print(f"[DH] Vigenere key for {addr} ({name}): {key}\n")
+
+    broadcast_user_list()
 
     try:
         while True:
@@ -28,20 +44,34 @@ def handle_client(conn, addr):
                 break
             msg = Vigenere.vigenere_decrypt(encrypted, key)
 
-            print(f"[RECEIVED from {addr}] Encrypted: {encrypted}")
-            print(f"[DECRYPTED for {addr}] Plaintext: {msg}\n")
+            # Handle system/user list update messages
+            if msg.startswith("TO:"):
+                parts = msg.split(":", 2)
+                if len(parts) == 3:
+                    _, recipient_name, body = parts
+                    sent = False
+                    for client, info in clients.items():
+                        if info["name"] == recipient_name:
+                            encrypted_msg = Vigenere.vigenere_encrypt(f"(Private) {name}: {body}", info["key"])
+                            client.send(encrypted_msg.encode())
+                            sent = True
+                    if not sent:
+                        error_msg = Vigenere.vigenere_encrypt("Server: Recipient not found.", key)
+                        conn.send(error_msg.encode())
+                continue
 
-            # Broadcast to other clients
-            for client, k in clients.items():
+            # Broadcast to all other clients
+            for client, info in clients.items():
                 if client != conn:
-                    re_encrypted = Vigenere.vigenere_encrypt(f"{addr}: {msg}", k)
-                    print(f"[SENT to {client.getpeername()}] Re-encrypted: {re_encrypted}\n")
-                    client.send(re_encrypted.encode())
+                    encrypted_msg = Vigenere.vigenere_encrypt(f"{name}: {msg}", info["key"])
+                    client.send(encrypted_msg.encode())
+
     except Exception as e:
         print(f"[ERROR] {e}")
     finally:
-        print(f"[-] Disconnected: {addr}")
+        print(f"[-] Disconnected: {addr} ({name})")
         clients.pop(conn)
+        broadcast_user_list()
         conn.close()
 
 def start_server(host='localhost', port=5555):
