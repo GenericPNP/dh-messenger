@@ -1,5 +1,4 @@
 import socket, threading, tkinter as tk, tkinter.simpledialog as simpledialog
-from tkinter import ttk
 from DiffieHellman import DiffieHellman, key_to_string
 from vigenere import Vigenere
 
@@ -9,21 +8,44 @@ BASE = 5
 class ChatClient:
     def __init__(self, master):
         self.master = master
-        self.master.title("Encrypted Messenger")
-        self.master.configure(bg="#2c2f33")
-
         self.username = simpledialog.askstring("Username", "Enter your name:")
         if not self.username:
             self.master.destroy()
             return
+        self.master.title(f"Encrypted Messenger – {self.username}")
+        self.master.configure(bg="#2c2f33")
 
-        self.notebook = ttk.Notebook(master)
-        self.notebook.pack(expand=1, fill='both')
+        self.chat_logs = {}  # username -> Text widget
+        self.active_chat = "everyone"
 
-        self.chat_tabs = {}  # username -> {frame, log, entry}
-        self.key = None
+        self.left_frame = tk.Frame(master, width=150, bg="#23272a")
+        self.left_frame.pack(side='left', fill='y')
+
+        self.contacts_label = tk.Label(self.left_frame, text="Contacts", bg="#23272a", fg="white")
+        self.contacts_label.pack(pady=5)
+
+        self.contact_listbox = tk.Listbox(self.left_frame, bg="#2c2f33", fg="white")
+        self.contact_listbox.pack(fill='y', expand=True, padx=5)
+        self.contact_listbox.bind("<<ListboxSelect>>", self.switch_chat)
+
+        self.right_frame = tk.Frame(master, bg="#2c2f33")
+        self.right_frame.pack(side='right', fill='both', expand=True)
+
+        self.chat_display = tk.Text(self.right_frame, state='disabled', bg="#2c2f33", fg="white")
+        self.chat_display.pack(fill='both', expand=True, padx=10, pady=5)
+
+        self.entry_frame = tk.Frame(self.right_frame, bg="#2c2f33")
+        self.entry_frame.pack(fill='x', pady=(0, 10))
+
+        self.msg_entry = tk.Entry(self.entry_frame)
+        self.msg_entry.pack(side='left', fill='x', expand=True, padx=(10, 5))
+        self.msg_entry.bind("<Return>", self.send_message)
+
+        self.send_btn = tk.Button(self.entry_frame, text="Send", command=self.send_message)
+        self.send_btn.pack(side='right', padx=(0, 10))
 
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.key = None
         self.connect_to_server()
 
         threading.Thread(target=self.receive_messages, daemon=True).start()
@@ -38,9 +60,8 @@ class ChatClient:
 
         encrypted_name = Vigenere.vigenere_encrypt(self.username, self.key)
         self.sock.send(encrypted_name.encode())
-
+        self.ensure_contact("everyone")
         self.display_message("everyone", "🔐 Encrypted session established.")
-        self.ensure_tab("everyone")
 
     def receive_messages(self):
         while True:
@@ -52,7 +73,7 @@ class ChatClient:
                         users = msg.replace("SYSTEM:USERLIST:", "").split(",")
                         for user in users:
                             if user != self.username:
-                                self.ensure_tab(user)
+                                self.ensure_contact(user)
                     elif msg.startswith("(Private) "):
                         sender = msg.split()[1].split(":")[0]
                         self.display_message(sender, msg)
@@ -62,23 +83,30 @@ class ChatClient:
             except:
                 break
 
-    def ensure_tab(self, username):
-        if username not in self.chat_tabs:
-            frame = ttk.Frame(self.notebook)
-            chat_log = tk.Text(frame, state='disabled', wrap='word', bg="#2c2f33", fg="white")
-            chat_log.pack(expand=1, fill='both')
-            entry = tk.Entry(frame)
-            entry.pack(side='left', fill='x', expand=True, padx=(10, 0), pady=5)
-            entry.bind("<Return>", lambda event, u=username: self.send_message(u))
-            send_btn = tk.Button(frame, text="Send", command=lambda u=username: self.send_message(u))
-            send_btn.pack(side='left', padx=10, pady=5)
-            self.chat_tabs[username] = {"frame": frame, "log": chat_log, "entry": entry}
-            self.notebook.add(frame, text=username)
+    def ensure_contact(self, username):
+        if username not in self.chat_logs:
+            self.chat_logs[username] = []
+            self.contact_listbox.insert(tk.END, username)
 
-    def send_message(self, target):
-        entry = self.chat_tabs[target]["entry"]
-        msg = entry.get()
+    def switch_chat(self, event):
+        selection = self.contact_listbox.curselection()
+        if selection:
+            index = selection[0]
+            self.active_chat = self.contact_listbox.get(index)
+            self.refresh_chat_display()
+
+    def refresh_chat_display(self):
+        self.chat_display.config(state='normal')
+        self.chat_display.delete(1.0, tk.END)
+        for line in self.chat_logs.get(self.active_chat, []):
+            self.chat_display.insert(tk.END, line + '\n')
+        self.chat_display.config(state='disabled')
+        self.chat_display.see(tk.END)
+
+    def send_message(self, event=None):
+        msg = self.msg_entry.get()
         if msg.strip():
+            target = self.active_chat
             if target != "everyone":
                 payload = f"TO:{target}:{msg}"
                 display = f"You (to {target}): {msg}"
@@ -88,15 +116,13 @@ class ChatClient:
             encrypted = Vigenere.vigenere_encrypt(payload, self.key)
             self.sock.send(encrypted.encode())
             self.display_message(target, display)
-            entry.delete(0, tk.END)
+            self.msg_entry.delete(0, tk.END)
 
     def display_message(self, target, msg):
-        self.ensure_tab(target)
-        log = self.chat_tabs[target]["log"]
-        log.config(state='normal')
-        log.insert(tk.END, msg + '\n')
-        log.config(state='disabled')
-        log.see(tk.END)
+        self.ensure_contact(target)
+        self.chat_logs[target].append(msg)
+        if self.active_chat == target:
+            self.refresh_chat_display()
 
 if __name__ == "__main__":
     root = tk.Tk()
